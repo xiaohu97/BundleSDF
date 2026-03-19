@@ -42,7 +42,11 @@ class LoftrRunner:
 
     batch_size = 64
     ret_keys = ['mkpts0_f','mkpts1_f','mconf','m_bids']
-    with torch.cuda.amp.autocast(enabled=True):
+    if hasattr(torch, 'amp'):
+      autocast_cm = torch.amp.autocast('cuda', enabled=True)
+    else:
+      autocast_cm = torch.cuda.amp.autocast(enabled=True)
+    with autocast_cm:
       i_b = 0
       for b in range(0,len(last_data['image0']),batch_size):
         tmp = {'image0': last_data['image0'][b:b+batch_size], 'image1': last_data['image1'][b:b+batch_size]}

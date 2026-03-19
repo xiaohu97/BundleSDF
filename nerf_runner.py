@@ -26,6 +26,18 @@ from nerf_helpers import *
 from Utils import *
 
 
+def autocast_cuda(enabled: bool):
+  if hasattr(torch, 'amp'):
+    return torch.amp.autocast('cuda', enabled=enabled)
+  return torch.cuda.amp.autocast(enabled=enabled)
+
+
+def grad_scaler_cuda(enabled: bool):
+  if hasattr(torch, 'amp') and hasattr(torch.amp, 'GradScaler'):
+    return torch.amp.GradScaler('cuda', enabled=enabled)
+  return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
 def batchify(fn, chunk):
   """Constructs a version of 'fn' that applies to smaller batches.
   """
@@ -156,7 +168,7 @@ class NerfRunner:
     self.create_nerf()
     self.create_optimizer()
 
-    self.amp_scaler = torch.cuda.amp.GradScaler(enabled=self.cfg['amp'])
+    self.amp_scaler = grad_scaler_cuda(enabled=self.cfg['amp'])
 
     self.global_step = 0
 
@@ -1256,7 +1268,7 @@ class NerfRunner:
       if inputs_flat.requires_grad==False:
         inputs_flat.requires_grad = True
 
-    with torch.cuda.amp.autocast(enabled=self.cfg['amp']):
+    with autocast_cuda(enabled=self.cfg['amp']):
       if self.cfg['i_embed'] in [3]:
         embedded[valid_samples.reshape(-1)], valid_samples_embed = self.models['embed_fn'](inputs_flat[valid_samples.reshape(-1)])
         valid_samples = valid_samples.reshape(-1)
@@ -1290,7 +1302,7 @@ class NerfRunner:
       embedded = torch.cat([embedded, embedded_dirs_flat], -1)
 
     outputs_flat = []
-    with torch.cuda.amp.autocast(enabled=self.cfg['amp']):
+    with autocast_cuda(enabled=self.cfg['amp']):
       chunk = self.cfg['netchunk']
       for i in range(0,embedded.shape[0],chunk):
         out = self.models['model'](embedded[i:i+chunk])
@@ -1320,7 +1332,7 @@ class NerfRunner:
     if not inputs_flat.requires_grad:
       inputs_flat.requires_grad = True
 
-    with torch.cuda.amp.autocast(enabled=self.cfg['amp']):
+    with autocast_cuda(enabled=self.cfg['amp']):
       if self.cfg['i_embed'] in [3]:
         embedded, valid_samples_embed = self.models['embed_fn'](inputs_flat)
         valid_samples = valid_samples.reshape(-1)
@@ -1335,7 +1347,7 @@ class NerfRunner:
     input_ch = embedded.shape[-1]
 
     outputs_flat = []
-    with torch.cuda.amp.autocast(enabled=self.cfg['amp']):
+    with autocast_cuda(enabled=self.cfg['amp']):
       chunk = self.cfg['netchunk']
       for i in range(0,embedded.shape[0],chunk):
         alpha = self.models['model'].forward_sdf(embedded[i:i+chunk])   #(N,1)
@@ -1363,31 +1375,60 @@ class NerfRunner:
     tx = np.arange(x_min+0.5*voxel_size, x_max, voxel_size)
     ty = np.arange(y_min+0.5*voxel_size, y_max, voxel_size)
     tz = np.arange(z_min+0.5*voxel_size, z_max, voxel_size)
-    N = len(tx)
-    query_pts = torch.tensor(np.stack(np.meshgrid(tx, ty, tz, indexing='ij'), -1).astype(np.float32).reshape(-1,3)).float().cuda()
+    nx, ny, nz = len(tx), len(ty), len(tz)
+    max_cells_per_axis = int(self.cfg.get('max_mesh_cells_per_axis', 256))
+    current_max_cells = max(nx, ny, nz)
+    if current_max_cells > max_cells_per_axis:
+      scale = current_max_cells / float(max_cells_per_axis)
+      voxel_size *= scale
+      tx = np.arange(x_min+0.5*voxel_size, x_max, voxel_size)
+      ty = np.arange(y_min+0.5*voxel_size, y_max, voxel_size)
+      tz = np.arange(z_min+0.5*voxel_size, z_max, voxel_size)
+      nx, ny, nz = len(tx), len(ty), len(tz)
+      logging.info(
+        f"Mesh grid too dense, increasing voxel size to "
+        f"{voxel_size / self.cfg['sc_factor']:.6f} m "
+        f"to cap the grid at about {max_cells_per_axis} cells per axis"
+      )
+    if min(nx, ny, nz) < 2:
+      logging.info('Mesh extraction grid is too small')
+      return (None, None, None) if return_sigma else None
+
+    total_pts = nx * ny * nz
+    mesh_chunk = min(int(self.cfg['netchunk']), 262144)
+    sigma = np.ones((total_pts,), dtype=np.float32)
 
     if self.octree_m is not None:
       vox_size = self.cfg['octree_raytracing_voxel_size']*self.cfg['sc_factor']
       level = int(np.floor(np.log2(2.0/vox_size)))
-      center_ids = self.octree_m.get_center_ids(query_pts, level)
-      valid = center_ids>=0
-    else:
-      valid = torch.ones(len(query_pts), dtype=bool).cuda()
+    valid_total = 0
+    logging.info(f'Extracting mesh on grid {nx}x{ny}x{nz} ({total_pts} points), chunk={mesh_chunk}')
+    yz = ny * nz
+    for start in range(0, total_pts, mesh_chunk):
+      end = min(start + mesh_chunk, total_pts)
+      ids = np.arange(start, end, dtype=np.int64)
+      ix = ids // yz
+      rem = ids % yz
+      iy = rem // nz
+      iz = rem % nz
+      pts_np = np.stack((tx[ix], ty[iy], tz[iz]), axis=-1).astype(np.float32)
+      query_pts_chunk = torch.from_numpy(pts_np).cuda()
 
-    logging.info(f'query_pts:{query_pts.shape}, valid:{valid.sum()}')
-    flat = query_pts[valid]
+      if self.octree_m is not None:
+        center_ids = self.octree_m.get_center_ids(query_pts_chunk, level)
+        valid = center_ids >= 0
+      else:
+        valid = torch.ones((len(query_pts_chunk),), dtype=torch.bool, device=query_pts_chunk.device)
 
-    sigma = []
-    chunk = self.cfg['netchunk']
-    for i in range(0,flat.shape[0],chunk):
-      inputs = flat[i:i+chunk]
-      with torch.no_grad():
-        outputs,valid_samples = self.run_network_density(inputs=inputs)
-      sigma.append(outputs)
-    sigma = torch.cat(sigma, dim=0)
-    sigma_ = torch.ones((N**3)).float().cuda()
-    sigma_[valid] = sigma.reshape(-1)
-    sigma = sigma_.reshape(N,N,N).data.cpu().numpy()
+      n_valid = int(valid.sum().item())
+      valid_total += n_valid
+      if n_valid > 0:
+        with torch.no_grad():
+          outputs, valid_samples = self.run_network_density(inputs=query_pts_chunk[valid])
+        sigma[start:end][valid.detach().cpu().numpy()] = outputs.reshape(-1).detach().cpu().numpy()
+
+    logging.info(f'valid query points: {valid_total}/{total_pts}')
+    sigma = sigma.reshape(nx, ny, nz)
 
     logging.info('Running Marching Cubes')
     from skimage import measure
@@ -1400,7 +1441,7 @@ class NerfRunner:
     logging.info(f'done V:{vertices.shape}, F:{triangles.shape}')
 
     # Rescale and translate
-    voxel_size_ndc = np.array([tx[-1] - tx[0], ty[-1] - ty[0], tz[-1] - tz[0]]) / np.array([[tx.shape[0] - 1, ty.shape[0] - 1, tz.shape[0] - 1]])
+    voxel_size_ndc = np.array([tx[-1] - tx[0], ty[-1] - ty[0], tz[-1] - tz[0]]) / np.array([tx.shape[0] - 1, ty.shape[0] - 1, tz.shape[0] - 1])
     offset = np.array([tx[0], ty[0], tz[0]])
     vertices[:, :3] = voxel_size_ndc.reshape(1,3) * vertices[:, :3] + offset.reshape(1,3)
 
@@ -1408,7 +1449,7 @@ class NerfRunner:
     mesh = trimesh.Trimesh(vertices, triangles, process=False)
 
     if return_sigma:
-      return mesh,sigma,query_pts
+      return mesh,sigma,None
 
     return mesh
 
@@ -1486,7 +1527,11 @@ class NerfRunner:
     tex_image = torch.zeros((tex_res,tex_res,3)).cuda().float()
     weight_tex_image = torch.zeros(tex_image.shape[:-1]).cuda().float()
     mesh.merge_vertices()
-    mesh.remove_duplicate_faces()
+    if hasattr(mesh, 'remove_duplicate_faces'):
+      mesh.remove_duplicate_faces()
+    elif hasattr(mesh, 'unique_faces'):
+      mesh.update_faces(mesh.unique_faces())
+      mesh.remove_unreferenced_vertices()
     mesh = mesh.unwrap()
     H,W = tex_image.shape[:2]
     uvs_tex = (mesh.visual.uv*np.array([W-1,H-1]).reshape(1,2))    #(n_V,2)
@@ -1544,4 +1589,3 @@ class NerfRunner:
     tex_image = tex_image[::-1].copy()
     mesh.visual = trimesh.visual.texture.TextureVisuals(uv=mesh.visual.uv,image=Image.fromarray(tex_image))
     return mesh
-

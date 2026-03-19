@@ -15,7 +15,16 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
-from torch.cuda.amp import custom_bwd, custom_fwd
+if hasattr(torch, 'amp') and hasattr(torch.amp, 'custom_fwd'):
+    def custom_fwd(*args, **kwargs):
+        kwargs.setdefault('device_type', 'cuda')
+        return torch.amp.custom_fwd(*args, **kwargs)
+
+    def custom_bwd(*args, **kwargs):
+        kwargs.setdefault('device_type', 'cuda')
+        return torch.amp.custom_bwd(*args, **kwargs)
+else:
+    from torch.cuda.amp import custom_bwd, custom_fwd
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from torch.utils.cpp_extension import load

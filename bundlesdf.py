@@ -10,6 +10,8 @@
 from Utils import *
 from nerf_runner import *
 from tool import *
+import glob
+import shutil
 code_dir = os.path.dirname(os.path.realpath(__file__))
 bundletrack_dir = os.path.join(code_dir, 'BundleTrack')
 bundletrack_build_dir = os.path.join(bundletrack_dir, 'build')
@@ -59,9 +61,22 @@ def set_bundlesdf_precision(use_full_precision: bool = True) -> torch.dtype:
         # Force full precision (safest option for pose tracking)
         torch.set_default_dtype(torch.float32)
         if torch.cuda.is_available():
-            torch.set_default_tensor_type(torch.cuda.FloatTensor)
+            if hasattr(torch, "set_default_device"):
+                torch.set_default_device("cuda")
+            else:
+                torch.set_default_tensor_type(torch.cuda.FloatTensor)
         logging.info("Set PyTorch to use full precision (float32) for BundleSDF")
     return torch.get_default_dtype()
+
+
+def copy_matching_files(pattern: str, out_dir: str) -> int:
+    os.makedirs(out_dir, exist_ok=True)
+    matched = sorted(glob.glob(pattern))
+    for src in matched:
+        shutil.copy2(src, os.path.join(out_dir, os.path.basename(src)))
+    if len(matched) == 0:
+        logging.info(f"No files matched pattern: {pattern}")
+    return len(matched)
 
 # Define required tensor types for different operations
 LOFTR_TYPES = {
@@ -407,7 +422,7 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
 
     ####### Log
     if SPDLOG>=2:
-      os.system(f"cp -r {cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")
+      copy_matching_files(f"{cfg_nerf['save_dir']}/image_step_*.png", out_dir)
       with open(f"{out_dir}/config.yml",'w') as ff:
         tmp = copy.deepcopy(cfg_nerf)
         for k in tmp.keys():
@@ -892,7 +907,7 @@ class BundleSdf:
     optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],self.cfg_nerf['sc_factor'],self.cfg_nerf['translation'])
 
     ####### Log
-    os.system(f"cp -r {self.cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")
+    copy_matching_files(f"{self.cfg_nerf['save_dir']}/image_step_*.png", out_dir)
     with open(f"{out_dir}/config.yml",'w') as ff:
       tmp = copy.deepcopy(self.cfg_nerf)
       for k in tmp.keys():
