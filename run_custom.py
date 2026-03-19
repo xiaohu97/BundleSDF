@@ -18,6 +18,14 @@ from segmentation_utils import Segmenter
 def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False):
   set_seed(0)
 
+  if os.path.isfile(video_dir) and video_dir.endswith('.bag'):
+    raise RuntimeError(
+      "run_custom.py expects --video_dir to be an extracted dataset folder, not a .bag file.\n"
+      "Please first run:\n"
+      f"  python {code_dir}/convert_realsense_bag.py --bag {video_dir}\n"
+      "Then pass the generated folder path to --video_dir."
+    )
+
   os.system(f'rm -rf {out_folder} && mkdir -p {out_folder}')
 
   cfg_bundletrack = yaml.load(open(f"{code_dir}/BundleTrack/config_ho3d.yml",'r'))

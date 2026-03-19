@@ -55,7 +55,7 @@ add_definitions(-DTIMER=0)
 add_definitions(-DPRINT_RESIDUALS_DENSE=0)
 add_definitions(-DPRINT_RESIDUALS_SPARSE=0)
 add_definitions(-DCUDA_RANSAC=1)
-add_definitions(-DCUDA_MATCHING=1)
+add_definitions(-DCUDA_MATCHING=0)
 
 # RPATH settings
 set(CMAKE_SKIP_BUILD_RPATH FALSE)
@@ -65,7 +65,21 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # Find required packages with version specifications where appropriate
 find_package(Boost 1.65.0 REQUIRED COMPONENTS system program_options serialization)
-find_package(PCL 1.8 REQUIRED)
+find_package(PCL 1.8 REQUIRED COMPONENTS
+    common
+    io
+    filters
+    features
+    sample_consensus
+    segmentation
+    registration
+    recognition
+    search
+    tracking
+    surface
+    kdtree
+    octree
+)
 find_package(Eigen3 3.3 REQUIRED)
 find_package(OpenCV 4.0 REQUIRED)
 find_package(OpenMP REQUIRED)
@@ -90,6 +104,8 @@ set(PYBIND11_CPP_STANDARD -std=c++17)
 # Include directories
 include_directories(
     src
+    /usr/include
+    $ENV{CONDA_PREFIX}/include
     ${Boost_INCLUDE_DIRS}
     ${PYTHON_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIR}
@@ -97,6 +113,8 @@ include_directories(
     ${CUDA_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
+    ${YAML_CPP_INCLUDE_DIRS}
+    ${YAML_CPP_INCLUDE_DIR}
     ${OPENGL_INCLUDE_DIR}
     ${CSPARSE_INCLUDE_DIR}
     ${PROJECT_SOURCE_DIR}/src

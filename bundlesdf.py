@@ -11,7 +11,17 @@ from Utils import *
 from nerf_runner import *
 from tool import *
 code_dir = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(f'{code_dir}/BundleTrack/build')
+bundletrack_dir = os.path.join(code_dir, 'BundleTrack')
+bundletrack_build_dir = os.path.join(bundletrack_dir, 'build')
+if not os.path.isdir(bundletrack_build_dir):
+  for name in sorted(os.listdir(bundletrack_dir), reverse=True):
+    candidate_dir = os.path.join(bundletrack_dir, name)
+    if not name.startswith('build') or not os.path.isdir(candidate_dir):
+      continue
+    if any(entry.startswith('my_cpp') and entry.endswith(('.so', '.pyd')) for entry in os.listdir(candidate_dir)):
+      bundletrack_build_dir = candidate_dir
+      break
+sys.path.append(bundletrack_build_dir)
 import my_cpp
 from gui import *
 from BundleTrack.scripts.data_reader import *

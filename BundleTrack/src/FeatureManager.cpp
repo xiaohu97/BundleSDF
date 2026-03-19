@@ -11,9 +11,21 @@
 
 #include "FeatureManager.h"
 #include "cuda_ransac.h"
-#include <opencv2/cudafeatures2d.hpp>
 
 using namespace std;
+
+namespace {
+
+template <typename PointA, typename PointB>
+float pointDistance3d(const PointA &a, const PointB &b)
+{
+  const float dx = a.x - b.x;
+  const float dy = a.y - b.y;
+  const float dz = a.z - b.z;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+}  // namespace
 
 
 
@@ -741,7 +753,7 @@ void SiftManager::pruneMatches(std::shared_ptr<Frame> frameA, std::shared_ptr<Fr
       if (ptA.z<0.1 || ptB.z<0.1) continue;
       auto PA_world = pcl::transformPointWithNormal(ptA, frameA->_pose_in_model);
       auto PB_world = pcl::transformPointWithNormal(ptB, frameB->_pose_in_model);
-      float dist = pcl::geometry::distance(PA_world, PB_world);
+      float dist = pointDistance3d(PA_world, PB_world);
       Eigen::Vector3f n1(PA_world.normal_x,PA_world.normal_y,PA_world.normal_z);
       Eigen::Vector3f n2(PB_world.normal_x,PB_world.normal_y,PB_world.normal_z);
       if (dist>dist_thres || n1.normalized().dot(n2.normalized())<normal_thres) continue;
@@ -791,6 +803,43 @@ void SiftManager::findCorresbyNNMultiPair(std::vector<FramePair> &pairs)
   const float cos_max_normal_neighbor = std::cos((*yml)["feature_corres"]["max_normal_neighbor"].as<float>()/180.0*M_PI);
   const int k_near = 5;
 
+#if CUDA_MATCHING==0
+  cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::BRUTEFORCE);
+  for (int i=0;i<pairs.size();i++)
+  {
+    auto &fA = pairs[i].first;
+    auto &fB = pairs[i].second;
+
+    float visible = computeCovisibility(fA, fB);
+    SPDLOG("frame {} and {} visible={}",fA->_id_str,fB->_id_str,visible);
+    if (visible<(*yml)["bundle"]["non_neighbor_min_visible"].as<float>())
+    {
+      SPDLOG("frame {} and {} visible={} skip matching",fA->_id_str,fB->_id_str,visible);
+      _matches[{fA,fB}].clear();
+      continue;
+    }
+
+    if (fA->_feat_des.empty() || fB->_feat_des.empty())
+    {
+      _matches[{fA,fB}].clear();
+      continue;
+    }
+
+    std::vector< std::vector<cv::DMatch> > knn_matchesAB, knn_matchesBA;
+    std::vector<cv::DMatch> matchesAB, matchesBA;
+    matcher->knnMatch(fA->_feat_des, fB->_feat_des, knn_matchesAB, k_near);
+    if (mutual)
+    {
+      matcher->knnMatch(fB->_feat_des, fA->_feat_des, knn_matchesBA, k_near);
+    }
+    pruneMatches(fA,fB,knn_matchesAB,matchesAB);
+    if (mutual)
+    {
+      pruneMatches(fB,fA,knn_matchesBA,matchesBA);
+    }
+    collectMutualMatches(fA,fB,matchesAB,matchesBA);
+  }
+#else
   std::vector<cv::cuda::Stream> streams(pairs.size()*2);
   std::vector<cv::cuda::GpuMat> matchesAB_gpus(pairs.size()), matchesBA_gpus(pairs.size());
   cv::Ptr<cv::cuda::DescriptorMatcher> matcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_L2);
@@ -841,6 +890,7 @@ void SiftManager::findCorresbyNNMultiPair(std::vector<FramePair> &pairs)
     }
     collectMutualMatches(fA,fB,matchesAB,matchesBA);
   }
+#endif
 }
 
 
@@ -1398,8 +1448,8 @@ void SiftManager::runRansacBetween(std::shared_ptr<Frame> frameA, std::shared_pt
           }
         }
 
-        float distA = pcl::geometry::distance(match1._ptA_cam, match2._ptA_cam);
-        float distB = pcl::geometry::distance(match1._ptB_cam, match2._ptB_cam);
+        float distA = pointDistance3d(match1._ptA_cam, match2._ptA_cam);
+        float distB = pointDistance3d(match1._ptB_cam, match2._ptB_cam);
         if (std::abs(distA-distB)>=0.005)
         {
           // SPDLOG("distA and distB bad {}", std::abs(distA-distB));
@@ -1461,7 +1511,7 @@ void SiftManager::runRansacBetween(std::shared_ptr<Frame> frameA, std::shared_pt
       auto pcl_pt2 = match._ptB_cam;
       pcl_pt1 = pcl::transformPointWithNormal<pcl::PointXYZRGBNormal>(pcl_pt1,A_in_cam.inverse().eval());
       pcl_pt2 = pcl::transformPointWithNormal<pcl::PointXYZRGBNormal>(pcl_pt2,frameB->_pose_in_model);
-      float dist = pcl::geometry::distance(pcl_pt1, pcl_pt2);
+      float dist = pointDistance3d(pcl_pt1, pcl_pt2);
       if (dist>inlier_dist)
       {
         // if (frameA->_id_str=="0008" && frameB->_id_str=="0000")
@@ -1566,7 +1616,7 @@ Correspondence SiftManager::makeCorrespondence(float uA_, float vA_, float uB_, 
 
   auto PA_world = pcl::transformPointWithNormal(ptA, fA->_pose_in_model);
   auto PB_world = pcl::transformPointWithNormal(ptB, fB->_pose_in_model);
-  float dist = pcl::geometry::distance(PA_world, PB_world);
+  float dist = pointDistance3d(PA_world, PB_world);
   Eigen::Vector3f n1(PA_world.normal_x,PA_world.normal_y,PA_world.normal_z);
   Eigen::Vector3f n2(PB_world.normal_x,PB_world.normal_y,PB_world.normal_z);
   if (dist>dist_thres || n1.normalized().dot(n2.normalized())<dot_thres)
@@ -1997,7 +2047,7 @@ void SiftManager::vizPositiveMatches(std::shared_ptr<Frame> frameA, std::shared_
     ptB.z = depthB;
     ptA = pcl::transformPointWithNormal(ptA, frameA->_gt_pose_in_model);
     ptB = pcl::transformPointWithNormal(ptB, frameB->_gt_pose_in_model);
-    float dist = pcl::geometry::distance(ptA, ptB);
+    float dist = pointDistance3d(ptA, ptB);
     if (dist<=dist_thres)
     {
       positive_corres.push_back(match);

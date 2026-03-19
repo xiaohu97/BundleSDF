@@ -1,0 +1,1 @@
+  "/home/ustczxh/miniconda3/envs/bundlesdf/targets/x86_64-linux/lib/libcudart_static.a" -ldl "/usr/lib/x86_64-linux-gnu/librt.a" -lcudadevrt -lcudart_static -lrt -lpthread 

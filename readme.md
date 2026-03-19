@@ -1,5 +1,7 @@
 # BundleSDF: Neural 6-DoF Tracking and 3D Reconstruction of Unknown Objects
 
+[中文说明](./README.zh.md)
+
 This is an implementation of our paper published in CVPR 2023
 
 [[Arxiv](https://arxiv.org/abs/2303.14158)] [[Project page](https://bundlesdf.github.io/)] [[Supplemental video](https://www.youtube.com/watch?v=5PymzKbKv8w/)]
@@ -54,6 +56,50 @@ cd docker && bash run_container.sh
 bash build.sh
 ```
 
+# Quick start without Docker
+The commands below are the shortest local workflow for a conda environment. On this machine, the tested environment name is `bundlesdf`.
+
+```bash
+conda activate bundlesdf
+cd /path/to/BundleSDF
+```
+
+If you want to convert Intel RealSense `.bag` recordings, make sure `pyrealsense2` is available in the same environment:
+
+```bash
+pip install pyrealsense2
+```
+
+LoFTR weights are required before running `run_custom.py`. The download folder should contain at least `outdoor_ds.ckpt` under:
+
+```text
+BundleTrack/LoFTR/weights/
+```
+
+# RealSense .bag workflow
+`run_custom.py` expects an extracted dataset folder, not a `.bag` file. For RealSense recordings, first convert the bag into aligned RGB-D frames:
+
+```bash
+python convert_realsense_bag.py \
+  --bag /path/to/sequence.bag \
+  --output_dir /path/to/sequence
+```
+
+This writes:
+
+```text
+/path/to/sequence
+  ├── rgb/
+  ├── depth/
+  ├── masks/
+  └── cam_K.txt
+```
+
+Notes:
+- `depth/` is saved as aligned `uint16` depth in millimeters.
+- `masks/` are placeholder valid-depth masks by default. Replace them with object masks for best tracking/reconstruction quality.
+- The output directory must be empty or not exist before conversion.
+
 # Run on your custom data
 - Prepare your RGBD video folder as below (also refer to the example milk data). You can find an [example milk data here](https://drive.google.com/file/d/1akutk_Vay5zJRMr3hVzZ7s69GT4gxuWN/view?usp=share_link) for testing.
 ```
@@ -68,14 +114,21 @@ Due to license issues, we are not able to include [XMem](https://github.com/hkch
 
 - Run your RGBD video (specify the video_dir and your desired output path). There are 3 steps. Note we assume the max relevant depth in the demo data <1. If this is not the case for you, change it [here](https://github.com/NVlabs/BundleSDF/blob/master/BundleTrack/config_ho3d.yml#L16)
 ```
-# 1) Run joint tracking and reconstruction. 
-python run_custom.py --mode run_video --video_dir /home/bowen/debug/2022-11-18-15-10-24_milk --out_folder /home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk --use_segmenter 1 --use_gui 1 --debug_level 2
+# 1) Run joint tracking and reconstruction.
+# For precomputed masks in masks/, use --use_segmenter 0.
+python run_custom.py --mode run_video --video_dir /path/to/sequence --out_folder /path/to/output --use_segmenter 0 --use_gui 0 --debug_level 2
 
 # 2) Run global refinement post-processing to refine the mesh
-python run_custom.py --mode global_refine --video_dir /home/bowen/debug/2022-11-18-15-10-24_milk --out_folder /home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk   # Change the path to your video_directory
+python run_custom.py --mode global_refine --video_dir /path/to/sequence --out_folder /path/to/output
 
 # 3) (Optional) If you want to draw the oriented bounding box to visualize the pose, similar to our demo
-python run_custom.py --mode draw_pose --out_folder /home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk
+python run_custom.py --mode draw_pose --out_folder /path/to/output
+```
+
+- Example on this machine:
+```
+python convert_realsense_bag.py --bag /home/ustczxh/realsense/20260319_184534.bag --output_dir /home/ustczxh/realsense/20260319_184534
+python run_custom.py --mode run_video --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output --use_gui 0
 ```
 
 - Finally the results will be dumped in the `out_folder`, including the tracked poses stored in `ob_in_cam/` and reconstructed mesh with texture `textured_mesh.obj`.
