@@ -116,6 +116,23 @@ python run_custom.py \
   --out_folder /home/ustczxh/realsense/output
 ```
 
+```
+conda activate bundlesdf
+cd /home/ustczxh/humanoid/BundleSDF
+
+python run_custom.py \
+  --mode run_video \
+  --video_dir /home/ustczxh/humanoid/BundleSDF/example_data/2022-11-18-15-10-24_milk \
+  --out_folder /home/ustczxh/humanoid/BundleSDF/example_data/milk_output \
+  --use_gui 0
+
+python run_custom.py \
+  --mode global_refine \
+  --video_dir /home/ustczxh/humanoid/BundleSDF/example_data/2022-11-18-15-10-24_milk \
+  --out_folder /home/ustczxh/humanoid/BundleSDF/example_data/milk_output
+
+```
+
 ## 输出结果
 运行结束后，结果会写入 `out_folder`，常见内容包括：
 
