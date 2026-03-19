@@ -109,14 +109,19 @@ python run_custom.py \
   --video_dir /home/ustczxh/realsense/20260319_184534 \
   --out_folder /home/ustczxh/realsense/output \
   --use_gui 0
+
+python run_custom.py \
+  --mode global_refine \
+  --video_dir /home/ustczxh/realsense/20260319_184534 \
+  --out_folder /home/ustczxh/realsense/output
 ```
 
 ## 输出结果
 运行结束后，结果会写入 `out_folder`，常见内容包括：
 
 - `ob_in_cam/`: 每帧物体位姿
+- `mesh_cleaned.obj`: 清理后的几何网格
 - `textured_mesh.obj`: 带纹理的重建网格
-- `mesh/`: 全局优化后的网格结果
 
 ## 注意事项
 - `run_custom.py` 不能直接把 `.bag` 路径传给 `--video_dir`。

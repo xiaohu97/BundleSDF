@@ -129,9 +129,13 @@ python run_custom.py --mode draw_pose --out_folder /path/to/output
 ```
 python convert_realsense_bag.py --bag /home/ustczxh/realsense/20260319_184534.bag --output_dir /home/ustczxh/realsense/20260319_184534
 python run_custom.py --mode run_video --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output --use_gui 0
+python run_custom.py --mode global_refine --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output
 ```
 
-- Finally the results will be dumped in the `out_folder`, including the tracked poses stored in `ob_in_cam/` and reconstructed mesh with texture `textured_mesh.obj`.
+- Finally the results will be dumped in the `out_folder`. Common outputs include:
+- `ob_in_cam/` for tracked poses
+- `mesh_cleaned.obj` for the cleaned geometry
+- `textured_mesh.obj` for the textured reconstruction mesh
 
 <img src="./media/milk_jug.gif" height="400">
 
