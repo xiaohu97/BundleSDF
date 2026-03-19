@@ -23,6 +23,7 @@ class LoftrRunner:
     self.matcher = LoFTR(config=default_cfg)
     self.matcher.load_state_dict(torch.load(f'{code_dir}/BundleTrack/LoFTR/weights/outdoor_ds.ckpt')['state_dict'])
     self.matcher = self.matcher.eval().cuda()
+    self.batch_size = int(os.environ.get('BUNDLESDF_LOFTR_BATCH_SIZE', '4'))
 
 
   @torch.no_grad()
@@ -40,16 +41,16 @@ class LoftrRunner:
     last_data = {'image0': image0, 'image1': image1}
     logging.info(f"image0: {last_data['image0'].shape}")
 
-    batch_size = 64
     ret_keys = ['mkpts0_f','mkpts1_f','mconf','m_bids']
     if hasattr(torch, 'amp'):
       autocast_cm = torch.amp.autocast('cuda', enabled=True)
     else:
       autocast_cm = torch.cuda.amp.autocast(enabled=True)
+    torch.cuda.empty_cache()
     with autocast_cm:
       i_b = 0
-      for b in range(0,len(last_data['image0']),batch_size):
-        tmp = {'image0': last_data['image0'][b:b+batch_size], 'image1': last_data['image1'][b:b+batch_size]}
+      for b in range(0,len(last_data['image0']),self.batch_size):
+        tmp = {'image0': last_data['image0'][b:b+self.batch_size], 'image1': last_data['image1'][b:b+self.batch_size]}
         with torch.no_grad():
           self.matcher(tmp)
         tmp['m_bids'] += i_b
@@ -58,6 +59,8 @@ class LoftrRunner:
             last_data[k] = []
           last_data[k].append(tmp[k])
         i_b += len(tmp['image0'])
+        del tmp
+        torch.cuda.empty_cache()
 
     logging.info("net forward")
 

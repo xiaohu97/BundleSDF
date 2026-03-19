@@ -27,7 +27,7 @@ year          = {2023},
 
 # Data download
 - Download pretrained [weights of segmentation network](https://drive.google.com/file/d/1MEZvjbBdNAOF7pXcq6XPQduHeXB50VTc/view?usp=share_link), and put it under
-`./BundleTrack/XMem/saves/XMem-s012.pth`
+`./BundleTrack/XMem/saves/XMem.pth`
 
 - Download pretrained [weights of LoFTR outdoor_ds.ckpt](https://drive.google.com/drive/folders/1xu2Pq6mZT5hmFgiYMBT9Zt8h1yO-3SIp), and put it under
 `./BundleTrack/LoFTR/weights/outdoor_ds.ckpt`
@@ -97,8 +97,19 @@ This writes:
 
 Notes:
 - `depth/` is saved as aligned `uint16` depth in millimeters.
-- `masks/` are placeholder valid-depth masks by default. Replace them with object masks for best tracking/reconstruction quality.
+- `masks/` are placeholder valid-depth masks by default. They are only meant to bootstrap the folder structure or do a quick pipeline smoke test.
+- Those placeholder masks are not object segmentation. If you use them directly for single-object tracking, other valid-depth regions such as the table, hand, or nearby clutter can also be treated as foreground.
+- For real object tracking/reconstruction, replace `masks/` with actual object masks, or at least provide a true first-frame object mask and let XMem propagate it.
 - The output directory must be empty or not exist before conversion.
+
+If you only want `rgb/`, `depth/`, and `cam_K.txt`, skip placeholder masks entirely:
+
+```bash
+python convert_realsense_bag.py \
+  --bag /path/to/sequence.bag \
+  --output_dir /path/to/sequence \
+  --no_masks
+```
 
 # Run on your custom data
 - Prepare your RGBD video folder as below (also refer to the example milk data). You can find an [example milk data here](https://drive.google.com/file/d/1akutk_Vay5zJRMr3hVzZ7s69GT4gxuWN/view?usp=share_link) for testing.
@@ -110,13 +121,44 @@ root
   └──cam_K.txt   (3x3 intrinsic matrix, use space and enter to delimit)
 ```
 
-Due to license issues, we are not able to include [XMem](https://github.com/hkchengrex/XMem) in this codebase for running segmentation online. If you are interested in doing so, please download the code separately and add a wrapper in `segmentation_utils.py`.
+## Masks, XMem, and visualization
+This workspace currently supports three common mask workflows:
+
+1. Precomputed masks for every frame
+Keep full `masks/*.png` in the dataset and run with `--use_segmenter 0`.
+
+2. Only a first-frame object mask
+Provide a real object mask in `masks/000000.png`, then run with `--use_segmenter 1` so XMem can propagate the segmentation through the sequence.
+
+3. Placeholder valid-depth masks from `convert_realsense_bag.py`
+These are useful for pipeline bring-up only. They are not a substitute for object segmentation.
+
+The original BundleSDF release does not vendor [XMem](https://github.com/hkchengrex/XMem) directly. In this workspace, the expected layout for the optional online segmenter is:
+```text
+BundleTrack/XMem/
+  └── saves/XMem.pth
+```
+With that in place, `segmentation_utils.py` can use XMem to propagate a first-frame object mask through the sequence. The generated predictions are also written to `masks_xmem/` beside your input data for inspection.
+
+If you want a quick overlay view of the masks you already have, this workspace also includes:
+
+```bash
+python create_masks_vis.py \
+  --data_dir /path/to/sequence
+```
+
+This creates `masks_vis/` by drawing the current masks over `rgb/`. It is a visualization helper only, and does not improve the masks themselves.
 
 - Run your RGBD video (specify the video_dir and your desired output path). There are 3 steps. Note we assume the max relevant depth in the demo data <1. If this is not the case for you, change it [here](https://github.com/NVlabs/BundleSDF/blob/master/BundleTrack/config_ho3d.yml#L16)
 ```
 # 1) Run joint tracking and reconstruction.
-# For precomputed masks in masks/, use --use_segmenter 0.
+# For precomputed per-frame masks in masks/, use --use_segmenter 0.
 python run_custom.py --mode run_video --video_dir /path/to/sequence --out_folder /path/to/output --use_segmenter 0 --use_gui 0 --debug_level 2
+
+# Or, if only the first-frame object mask is prepared in masks/000000.png,
+# let XMem propagate the mask to later frames. The first-frame mask must be
+# a real object mask, not the placeholder valid-depth mask from bag conversion.
+python run_custom.py --mode run_video --video_dir /path/to/sequence --out_folder /path/to/output --use_segmenter 1 --use_gui 0 --debug_level 2
 
 # 2) Run global refinement post-processing to refine the mesh
 python run_custom.py --mode global_refine --video_dir /path/to/sequence --out_folder /path/to/output
@@ -125,17 +167,33 @@ python run_custom.py --mode global_refine --video_dir /path/to/sequence --out_fo
 python run_custom.py --mode draw_pose --out_folder /path/to/output
 ```
 
+If you are tight on GPU memory, the following environment variables can help on smaller cards:
+
+```bash
+export BUNDLESDF_LOFTR_BATCH_SIZE=2
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
 - Example on this machine:
 ```
 python convert_realsense_bag.py --bag /home/ustczxh/realsense/20260319_184534.bag --output_dir /home/ustczxh/realsense/20260319_184534
+python create_masks_vis.py --data_dir /home/ustczxh/realsense/20260319_184534
 python run_custom.py --mode run_video --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output --use_gui 0
 python run_custom.py --mode global_refine --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output
+```
+
+- Example with a first-frame object mask plus XMem propagation on this machine:
+```
+export BUNDLESDF_LOFTR_BATCH_SIZE=2
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python run_custom.py --mode run_video --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output_keyboard_xmem --use_segmenter 1 --use_gui 0
 ```
 
 - Finally the results will be dumped in the `out_folder`. Common outputs include:
 - `ob_in_cam/` for tracked poses
 - `mesh_cleaned.obj` for the cleaned geometry
 - `textured_mesh.obj` for the textured reconstruction mesh
+- `masks_xmem/` beside the input data if XMem propagation is enabled
 
 <img src="./media/milk_jug.gif" height="400">
 
