@@ -9,10 +9,56 @@
 
 from bundlesdf import *
 import argparse
-import os,sys
+import os,sys,time
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(code_dir)
 from segmentation_utils import Segmenter
+
+
+def format_seconds(seconds):
+  seconds = max(0, int(round(seconds)))
+  mins, sec = divmod(seconds, 60)
+  hours, mins = divmod(mins, 60)
+  if hours > 0:
+    return f"{hours:d}:{mins:02d}:{sec:02d}"
+  return f"{mins:02d}:{sec:02d}"
+
+
+class TerminalProgressBar:
+  def __init__(self, total, label='run_video', width=28):
+    self.total = max(1, int(total))
+    self.label = label
+    self.width = width
+    self.start_time = time.time()
+    self.closed = False
+    self.last_len = 0
+
+  def update(self, current, frame_id=None):
+    if self.closed:
+      return
+    current = max(0, min(int(current), self.total))
+    frac = current / self.total
+    filled = int(round(self.width * frac))
+    bar = '#' * filled + '.' * (self.width - filled)
+    elapsed = time.time() - self.start_time
+    eta = 0 if current == 0 else elapsed / current * (self.total - current)
+    msg = f"\r[{self.label}] [{bar}] {current}/{self.total} ({frac*100:5.1f}%)"
+    if frame_id is not None:
+      msg += f" frame={frame_id}"
+    msg += f" elapsed={format_seconds(elapsed)} eta={format_seconds(eta)}"
+    padding = max(0, self.last_len - len(msg))
+    sys.stdout.write(msg + (' ' * padding))
+    sys.stdout.flush()
+    self.last_len = len(msg)
+    if current >= self.total:
+      self.close()
+
+  def close(self):
+    if self.closed:
+      return
+    sys.stdout.write('\n')
+    sys.stdout.flush()
+    self.closed = True
 
 
 def apply_global_refine_profile(cfg_nerf, profile='memory'):
@@ -58,7 +104,7 @@ def apply_global_refine_profile(cfg_nerf, profile='memory'):
   return tex_res, reader_kwargs
 
 
-def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False, auto_global_refine=False, global_refine_profile='memory'):
+def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False, auto_global_refine=False, global_refine_profile='memory', erode_mask=1):
   set_seed(0)
 
   if os.path.isfile(video_dir) and video_dir.endswith('.bag'):
@@ -74,7 +120,7 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
   cfg_bundletrack = yaml.load(open(f"{code_dir}/BundleTrack/config_ho3d.yml",'r'))
   cfg_bundletrack['SPDLOG'] = int(args.debug_level)
   cfg_bundletrack['depth_processing']["percentile"] = 95
-  cfg_bundletrack['erode_mask'] = 3
+  cfg_bundletrack['erode_mask'] = int(erode_mask)
   cfg_bundletrack['debug_dir'] = out_folder+'/'
   cfg_bundletrack['bundle']['max_BA_frames'] = 10
   cfg_bundletrack['bundle']['max_optimized_feature_loss'] = 0.03
@@ -115,44 +161,59 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
   if use_segmenter:
     segmenter = Segmenter()
 
-  tracker = BundleSdf(cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5, use_gui=use_gui)
+  tracker = None
+  progress = None
+  try:
+    tracker = BundleSdf(cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5, use_gui=use_gui)
 
-  reader = YcbineoatReader(video_dir=video_dir, shorter_side=480)
+    reader = YcbineoatReader(video_dir=video_dir, shorter_side=480)
+    frame_indices = list(range(0, len(reader.color_files), args.stride))
+    progress = TerminalProgressBar(total=len(frame_indices), label='run_video')
 
+    for step_idx, i in enumerate(frame_indices, start=1):
+      color_file = reader.color_files[i]
+      color = cv2.imread(color_file)
+      H0, W0 = color.shape[:2]
+      depth = reader.get_depth(i)
+      H,W = depth.shape[:2]
+      color = cv2.resize(color, (W,H), interpolation=cv2.INTER_NEAREST)
+      depth = cv2.resize(depth, (W,H), interpolation=cv2.INTER_NEAREST)
 
-  for i in range(0,len(reader.color_files),args.stride):
-    color_file = reader.color_files[i]
-    color = cv2.imread(color_file)
-    H0, W0 = color.shape[:2]
-    depth = reader.get_depth(i)
-    H,W = depth.shape[:2]
-    color = cv2.resize(color, (W,H), interpolation=cv2.INTER_NEAREST)
-    depth = cv2.resize(depth, (W,H), interpolation=cv2.INTER_NEAREST)
-
-    if i==0:
-      mask = reader.get_mask(0)
-      mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
-      if use_segmenter:
-        mask = segmenter.run(color_file.replace('rgb','masks'))
-    else:
-      if use_segmenter:
-        mask = segmenter.run(color_file.replace('rgb','masks'))
-      else:
-        mask = reader.get_mask(i)
+      if i==0:
+        mask = reader.get_mask(0)
         mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
+        if use_segmenter:
+          mask = segmenter.run(color_file.replace('rgb','masks'))
+      else:
+        if use_segmenter:
+          mask = segmenter.run(color_file.replace('rgb','masks'))
+        else:
+          mask = reader.get_mask(i)
+          mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
 
-    if cfg_bundletrack['erode_mask']>0:
-      kernel = np.ones((cfg_bundletrack['erode_mask'], cfg_bundletrack['erode_mask']), np.uint8)
-      mask = cv2.erode(mask.astype(np.uint8), kernel)
+      if cfg_bundletrack['erode_mask']>0:
+        kernel = np.ones((cfg_bundletrack['erode_mask'], cfg_bundletrack['erode_mask']), np.uint8)
+        mask = cv2.erode(mask.astype(np.uint8), kernel)
 
-    id_str = reader.id_strs[i]
-    pose_in_model = np.eye(4)
+      id_str = reader.id_strs[i]
+      pose_in_model = np.eye(4)
 
-    K = reader.K.copy()
+      K = reader.K.copy()
 
-    tracker.run(color, depth, K, id_str, mask=mask, occ_mask=None, pose_in_model=pose_in_model)
+      mask_pixels = int((mask > 0).sum())
+      valid_depth_pixels = int(((depth >= 0.1) & (mask > 0)).sum())
+      if mask_pixels == 0:
+        print(f"[run_custom.py] Warning: frame {id_str} mask empty after segmentation/erosion")
+      elif valid_depth_pixels == 0:
+        print(f"[run_custom.py] Warning: frame {id_str} mask has {mask_pixels} foreground pixels but zero valid depth")
 
-  tracker.on_finish()
+      tracker.run(color, depth, K, id_str, mask=mask, occ_mask=None, pose_in_model=pose_in_model)
+      progress.update(step_idx, frame_id=id_str)
+  finally:
+    if progress is not None:
+      progress.close()
+    if tracker is not None:
+      tracker.on_finish()
 
   if auto_global_refine:
     print(f"run_video finished. Starting global_refine with profile={global_refine_profile}")
@@ -259,10 +320,11 @@ if __name__=="__main__":
   parser.add_argument('--debug_level', type=int, default=2, help='higher means more logging')
   parser.add_argument('--auto_global_refine', type=int, default=0, help='run global_refine automatically after run_video; default 0 to avoid surprise memory spikes')
   parser.add_argument('--global_refine_profile', type=str, default='memory', choices=['memory', 'full'], help='memory: lower-memory defaults; full: original heavy settings')
+  parser.add_argument('--erode_mask', type=int, default=1, help='mask erosion kernel size for run_video; default 1 is more stable than the old hardcoded 3')
   args = parser.parse_args()
 
   if args.mode=='run_video':
-    run_one_video(video_dir=args.video_dir, out_folder=args.out_folder, use_segmenter=args.use_segmenter, use_gui=args.use_gui, auto_global_refine=bool(args.auto_global_refine), global_refine_profile=args.global_refine_profile)
+    run_one_video(video_dir=args.video_dir, out_folder=args.out_folder, use_segmenter=args.use_segmenter, use_gui=args.use_gui, auto_global_refine=bool(args.auto_global_refine), global_refine_profile=args.global_refine_profile, erode_mask=args.erode_mask)
   elif args.mode=='global_refine':
     run_one_video_global_nerf(out_folder=args.out_folder, global_refine_profile=args.global_refine_profile)
   elif args.mode=='draw_pose':

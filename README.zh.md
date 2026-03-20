@@ -147,7 +147,8 @@ python run_custom.py \
   --out_folder /path/to/output \
   --use_segmenter 1 \
   --use_gui 0 \
-  --debug_level 2
+  --debug_level 2 \
+  --erode_mask 1
 ```
 
 如果显存比较紧张，可以在运行前加上：
@@ -156,6 +157,12 @@ python run_custom.py \
 export BUNDLESDF_LOFTR_BATCH_SIZE=2
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
+
+补充说明：
+- `run_video` 现在会在终端显示逐帧进度条。
+- `--erode_mask` 默认是 `1`，比旧的硬编码 `3` 更稳；如果你的 mask 很薄或容易丢，可以继续降到 `0`。
+- `--stride` 可以控制抽帧间隔。比如 `--stride 20` 只处理每 20 帧中的 1 帧，适合快速 smoke test 或先验证流程是否跑通。
+- `--stride` 越大，速度越快，但位姿轨迹会更稀、重建细节也会更少。通常可以先用 `20` 快速试跑，再回到 `5`、`2` 或 `1` 做更完整结果。
 
 ### 2. 全局优化
 ```bash
@@ -207,12 +214,22 @@ python run_custom.py \
   --out_folder /home/ustczxh/realsense/output/20260319_184534 \
   --use_segmenter 1 \
   --use_gui 0 \
-  --debug_level 2
+  --debug_level 2 \
+  --erode_mask 1 \
+  --stride 20
+
+# 如果确认流程没问题，再把 stride 调小，例如 5 / 2 / 1
+# python run_custom.py ... --stride 5
 
 python run_custom.py \
   --mode global_refine \
   --video_dir /home/ustczxh/realsense/20260319_184534 \
   --out_folder /home/ustczxh/realsense/output/20260319_184534
+python run_custom.py \
+  --mode global_refine \
+  --video_dir /home/ustczxh/realsense/20260320_104138 \
+  --out_folder /home/ustczxh/realsense/output/20260320_104138
+
 ```
 
 说明：

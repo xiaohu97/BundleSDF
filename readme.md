@@ -174,7 +174,7 @@ python run_custom.py --mode run_video --video_dir /path/to/sequence --out_folder
 # Or, if only the first-frame object mask is prepared in masks/000000.png,
 # let XMem propagate the mask to later frames. The first-frame mask must be
 # a real object mask, not the placeholder valid-depth mask from bag conversion.
-python run_custom.py --mode run_video --video_dir /path/to/sequence --out_folder /path/to/output --use_segmenter 1 --use_gui 0 --debug_level 2
+python run_custom.py --mode run_video --video_dir /path/to/sequence --out_folder /path/to/output --use_segmenter 1 --use_gui 0 --debug_level 2 --erode_mask 1
 
 # 2) Run global refinement post-processing to refine the mesh
 python run_custom.py --mode global_refine --video_dir /path/to/sequence --out_folder /path/to/output
@@ -194,13 +194,20 @@ export BUNDLESDF_LOFTR_BATCH_SIZE=2
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
+Notes:
+- `run_video` now shows a per-frame terminal progress bar.
+- `--erode_mask` now defaults to `1`, which is more stable than the old hardcoded `3`. If your masks are very thin, you can lower it further to `0`.
+- `--stride` controls frame subsampling. For example, `--stride 20` only processes one out of every 20 frames, which is useful for a quick smoke test or a fast sanity check.
+- Larger `--stride` values are much faster, but they also make the pose trajectory sparser and usually reduce reconstruction quality. A common workflow is to start with `20`, then move to `5`, `2`, or `1` once the pipeline looks healthy.
+
 - Example on this machine:
 ```
 python convert_realsense_bag.py --bag /home/ustczxh/realsense/20260319_184534.bag --output_dir /home/ustczxh/realsense/20260319_184534
 python create_masks_vis.py --data_dir /home/ustczxh/realsense/20260319_184534
 python click_first_frame_mask.py --data_dir /home/ustczxh/realsense/20260319_184534 --frame 0
-python run_custom.py --mode run_video --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output --use_gui 0
-python run_custom.py --mode global_refine --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output
+python run_custom.py --mode run_video --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output/20260319_184534 --use_segmenter 1 --use_gui 0 --debug_level 2 --erode_mask 1 --stride 20
+# If the quick run looks good, reduce stride later, for example to 5 / 2 / 1.
+python run_custom.py --mode global_refine --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output/20260319_184534
 ```
 
 Notes:
