@@ -149,6 +149,22 @@ python create_masks_vis.py \
 
 This creates `masks_vis/` by drawing the current masks over `rgb/`. It is a visualization helper only, and does not improve the masks themselves.
 
+If you want a lightweight interactive way to create the first-frame object mask, this workspace also includes:
+
+```bash
+python click_first_frame_mask.py \
+  --data_dir /path/to/sequence \
+  --frame 0
+```
+
+Controls:
+- Left click: add foreground points on the target object
+- Right click: add background points
+- `Enter` or `r`: refine the mask
+- `s`: save to `masks/<frame>.png`
+
+When a matching depth image is available, the tool also uses a small depth prior to make the first-frame mask more stable.
+
 - Run your RGBD video (specify the video_dir and your desired output path). There are 3 steps. Note we assume the max relevant depth in the demo data <1. If this is not the case for you, change it [here](https://github.com/NVlabs/BundleSDF/blob/master/BundleTrack/config_ho3d.yml#L16)
 ```
 # 1) Run joint tracking and reconstruction.
@@ -162,6 +178,10 @@ python run_custom.py --mode run_video --video_dir /path/to/sequence --out_folder
 
 # 2) Run global refinement post-processing to refine the mesh
 python run_custom.py --mode global_refine --video_dir /path/to/sequence --out_folder /path/to/output
+
+# The default global_refine profile is now "memory", which is safer on smaller machines.
+# Switch back to the heavier/original-style setup only when you really want it.
+python run_custom.py --mode global_refine --video_dir /path/to/sequence --out_folder /path/to/output --global_refine_profile full
 
 # 3) (Optional) If you want to draw the oriented bounding box to visualize the pose, similar to our demo
 python run_custom.py --mode draw_pose --out_folder /path/to/output
@@ -178,9 +198,14 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 python convert_realsense_bag.py --bag /home/ustczxh/realsense/20260319_184534.bag --output_dir /home/ustczxh/realsense/20260319_184534
 python create_masks_vis.py --data_dir /home/ustczxh/realsense/20260319_184534
+python click_first_frame_mask.py --data_dir /home/ustczxh/realsense/20260319_184534 --frame 0
 python run_custom.py --mode run_video --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output --use_gui 0
 python run_custom.py --mode global_refine --video_dir /home/ustczxh/realsense/20260319_184534 --out_folder /home/ustczxh/realsense/output
 ```
+
+Notes:
+- `run_video` no longer auto-runs `global_refine` by default. This keeps tracking and the heavy final refinement separate, and avoids surprise memory spikes near the end.
+- If you really want the old chained behavior, add `--auto_global_refine 1`.
 
 - Example with a first-frame object mask plus XMem propagation on this machine:
 ```

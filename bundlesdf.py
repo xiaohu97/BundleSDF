@@ -438,7 +438,7 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
 
 
 class BundleSdf:
-  def __init__(self, cfg_track_dir=f"{code_dir}/config_ho3d.yml", cfg_nerf_dir=f'{code_dir}/config.yml', start_nerf_keyframes=10, translation=None, sc_factor=None, use_gui=False):
+  def __init__(self, cfg_track_dir=f"{code_dir}/config_ho3d.yml", cfg_nerf_dir=f'{code_dir}/config.yml', start_nerf_keyframes=10, translation=None, sc_factor=None, use_gui=False, tracking_mode=True):
     # Initialize tensor precision management first
     self.tensor_dtype = set_bundlesdf_precision(use_full_precision=True)
     logging.info(f"Initialized BundleSDF with tensor precision: {self.tensor_dtype}")
@@ -449,6 +449,7 @@ class BundleSdf:
     self.SPDLOG = self.cfg_track["SPDLOG"]
     self.start_nerf_keyframes = start_nerf_keyframes
     self.use_gui = use_gui
+    self.tracking_mode = tracking_mode
     self.translation = None
     self.sc_factor = None
     if sc_factor is not None:
@@ -461,9 +462,9 @@ class BundleSdf:
     self.cfg_nerf['notes'] = ''
     self.cfg_nerf['bounding_box'] = np.array(self.cfg_nerf['bounding_box']).reshape(2,3)
 
-    self.manager = multiprocessing.Manager()
+    self.manager = multiprocessing.Manager() if (self.use_gui or self.tracking_mode) else None
 
-    if self.use_gui:
+    if self.use_gui and self.manager is not None:
       self.gui_lock = multiprocessing.Lock()
       self.gui_dict = self.manager.dict()
       self.gui_dict['join'] = False
@@ -473,48 +474,52 @@ class BundleSdf:
     else:
       self.gui_lock = None
       self.gui_dict = None
+      self.gui_worker = None
 
-    self.p_dict = self.manager.dict()
-    self.kf_to_nerf_list = self.manager.list()
-    self.lock = multiprocessing.Lock()
-    self.p_dict['running'] = False
-    self.p_dict['join'] = False
-    self.p_dict['nerf_num_frames'] = 0
+    if self.tracking_mode:
+      self.p_dict = self.manager.dict()
+      self.kf_to_nerf_list = self.manager.list()
+      self.lock = multiprocessing.Lock()
+      self.p_dict['running'] = False
+      self.p_dict['join'] = False
+      self.p_dict['nerf_num_frames'] = 0
 
-    self.p_dict['SPDLOG'] = self.SPDLOG
-    self.p_nerf = multiprocessing.Process(target=run_nerf, args=(self.p_dict, self.kf_to_nerf_list, self.lock, self.cfg_nerf, self.translation, self.sc_factor, start_nerf_keyframes, self.use_gui, self.gui_lock, self.gui_dict, self.debug_dir))
-    self.p_nerf.start()
+      self.p_dict['SPDLOG'] = self.SPDLOG
+      self.p_nerf = multiprocessing.Process(target=run_nerf, args=(self.p_dict, self.kf_to_nerf_list, self.lock, self.cfg_nerf, self.translation, self.sc_factor, start_nerf_keyframes, self.use_gui, self.gui_lock, self.gui_dict, self.debug_dir))
+      self.p_nerf.start()
 
-    # self.p_dict = {}
-    # self.lock = threading.Lock()
-    # self.p_dict['running'] = False
-    # self.p_dict['join'] = False
-    # self.p_nerf = threading.Thread(target=self.run_nerf, args=(self.p_dict, self.lock))
-    # self.p_nerf.start()
+      yml = my_cpp.YamlLoadFile(cfg_track_dir)
+      self.bundler = my_cpp.Bundler(yml)
+      self.loftr = LoftrRunner()
+    else:
+      self.p_dict = {}
+      self.kf_to_nerf_list = []
+      self.lock = None
+      self.p_nerf = None
+      self.bundler = None
+      self.loftr = None
 
-    yml = my_cpp.YamlLoadFile(cfg_track_dir)
-    self.bundler = my_cpp.Bundler(yml)
-    self.loftr = LoftrRunner()
     self.cnt = -1
     self.K = None
     self.mesh = None
 
 
   def on_finish(self):
-    if self.use_gui:
+    if self.use_gui and self.gui_worker is not None:
       with self.gui_lock:
         self.gui_dict['join'] = True
       self.gui_worker.join()
 
-    with self.lock:
-      self.p_dict['join'] = True
-    self.p_nerf.join()
-    with self.lock:
-      if self.p_dict['running']==False and 'optimized_cvcam_in_obs' in self.p_dict:
-        for i_f in range(len(self.p_dict['optimized_cvcam_in_obs'])):
-          self.bundler._keyframes[i_f]._pose_in_model = self.p_dict['optimized_cvcam_in_obs'][i_f]
-          self.bundler._keyframes[i_f]._nerfed = True
-        del self.p_dict['optimized_cvcam_in_obs']
+    if self.p_nerf is not None:
+      with self.lock:
+        self.p_dict['join'] = True
+      self.p_nerf.join()
+      with self.lock:
+        if self.p_dict['running']==False and 'optimized_cvcam_in_obs' in self.p_dict:
+          for i_f in range(len(self.p_dict['optimized_cvcam_in_obs'])):
+            self.bundler._keyframes[i_f]._pose_in_model = self.p_dict['optimized_cvcam_in_obs'][i_f]
+            self.bundler._keyframes[i_f]._nerfed = True
+          del self.p_dict['optimized_cvcam_in_obs']
 
 
   def make_frame(self, color, depth, K, id_str, mask=None, occ_mask=None, pose_in_model=np.eye(4)):

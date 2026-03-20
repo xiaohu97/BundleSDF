@@ -108,6 +108,22 @@ python create_masks_vis.py \
 - `masks_vis/` 只是可视化结果，不会自动改进分割质量。
 - `create_masks_vis.py` 默认生成蓝色半透明叠加图，也可以通过 `--alpha` 和 `--color` 调整样式。
 
+如果你想“点几下目标”自动生成首帧物体 mask，可以使用交互脚本：
+
+```bash
+python click_first_frame_mask.py \
+  --data_dir /path/to/sequence \
+  --frame 0
+```
+
+交互方式：
+- 左键点击目标物体，添加前景点
+- 右键点击背景区域，添加背景点
+- 按 `Enter` 或 `r` 自动细化 mask
+- 按 `s` 保存到 `masks/000000.png`
+
+这个脚本会优先使用同名深度图做一个轻量深度先验，所以通常比纯 RGB 点选更稳一些。
+
 ## 运行方法
 ### 1. 跟踪与在线重建
 如果你已经在 `masks/` 中准备好了逐帧物体掩码，运行时请使用 `--use_segmenter 0`：
@@ -149,6 +165,16 @@ python run_custom.py \
   --out_folder /path/to/output
 ```
 
+默认会使用更省内存的 `memory` profile。如果你想切回更重、更慢但更接近原始仓库设置的版本，可以显式指定：
+
+```bash
+python run_custom.py \
+  --mode global_refine \
+  --video_dir /path/to/sequence \
+  --out_folder /path/to/output \
+  --global_refine_profile full
+```
+
 ### 3. 可选：绘制位姿框
 ```bash
 python run_custom.py \
@@ -171,17 +197,27 @@ python convert_realsense_bag.py \
 python create_masks_vis.py \
   --data_dir /home/ustczxh/realsense/20260319_184534
 
+python click_first_frame_mask.py \
+  --data_dir /home/ustczxh/realsense/20260319_184534 \
+  --frame 0
+
 python run_custom.py \
   --mode run_video \
   --video_dir /home/ustczxh/realsense/20260319_184534 \
-  --out_folder /home/ustczxh/realsense/output \
-  --use_gui 0
+  --out_folder /home/ustczxh/realsense/output/20260319_184534 \
+  --use_segmenter 1 \
+  --use_gui 0 \
+  --debug_level 2
 
 python run_custom.py \
   --mode global_refine \
   --video_dir /home/ustczxh/realsense/20260319_184534 \
-  --out_folder /home/ustczxh/realsense/output
+  --out_folder /home/ustczxh/realsense/output/20260319_184534
 ```
+
+说明：
+- `run_video` 现在默认不会再自动触发 `global_refine`，这样更符合“先跟踪、再按需精修”的预期，也能避免尾声阶段突然吃满内存。
+- 如果你确实想在 `run_video` 结束后自动接着跑，可以加 `--auto_global_refine 1`。
 
 如果你给 `masks/000000.png` 换成了真实物体首帧 mask，也可以打开 XMem：
 
@@ -225,6 +261,8 @@ python run_custom.py \
 ## 注意事项
 - `run_custom.py` 不能直接把 `.bag` 路径传给 `--video_dir`。
 - `create_masks_vis.py` 只负责把现有 `masks/` 画出来，不会自动帮你识别目标物体。
+- `click_first_frame_mask.py` 只负责生成首帧目标 mask；如果后续要自动传播，需要再配合 `--use_segmenter 1` 和 XMem。
 - 如果没有额外接入 XMem 等在线分割模块，就保持 `--use_segmenter 0`，并提前准备好逐帧 `masks/`。
 - 如果开启 `--use_segmenter 1`，请至少保证 `masks/000000.png` 是真实目标物体 mask，而不是占位的有效深度图。
+- `global_refine` 默认使用更省内存的 `memory` profile；如果机器内存和显存都比较充足，再考虑切到 `--global_refine_profile full`。
 - 默认配置假设目标相关深度范围比较近；如果场景更远，可以调整 `BundleTrack/config_ho3d.yml` 中的深度参数。

@@ -15,7 +15,50 @@ sys.path.append(code_dir)
 from segmentation_utils import Segmenter
 
 
-def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False):
+def apply_global_refine_profile(cfg_nerf, profile='memory'):
+  profile = profile.strip().lower()
+
+  if profile == 'memory':
+    cfg_nerf['n_step'] = 1000
+    cfg_nerf['N_samples'] = 64
+    cfg_nerf['N_samples_around_depth'] = 128
+    cfg_nerf['first_frame_weight'] = 1
+    cfg_nerf['down_scale_ratio'] = 1
+    cfg_nerf['finest_res'] = 192
+    cfg_nerf['num_levels'] = 12
+    cfg_nerf['mesh_resolution'] = 0.004
+    cfg_nerf['n_train_image'] = 120
+    cfg_nerf['fs_sdf'] = 0.1
+    cfg_nerf['frame_features'] = 2
+    cfg_nerf['rgb_weight'] = 100
+    tex_res = 256
+    reader_kwargs = {'shorter_side': 480}
+  elif profile == 'full':
+    cfg_nerf['n_step'] = 2000
+    cfg_nerf['N_samples'] = 64
+    cfg_nerf['N_samples_around_depth'] = 256
+    cfg_nerf['first_frame_weight'] = 1
+    cfg_nerf['down_scale_ratio'] = 1
+    cfg_nerf['finest_res'] = 256
+    cfg_nerf['num_levels'] = 16
+    cfg_nerf['mesh_resolution'] = 0.002
+    cfg_nerf['n_train_image'] = 500
+    cfg_nerf['fs_sdf'] = 0.1
+    cfg_nerf['frame_features'] = 2
+    cfg_nerf['rgb_weight'] = 100
+    tex_res = 512
+    reader_kwargs = {'downscale': 1}
+  else:
+    raise ValueError(f"Unsupported global refine profile: {profile}")
+
+  cfg_nerf['i_img'] = np.inf
+  cfg_nerf['i_mesh'] = cfg_nerf['i_img']
+  cfg_nerf['i_nerf_normals'] = cfg_nerf['i_img']
+  cfg_nerf['i_save_ray'] = cfg_nerf['i_img']
+  return tex_res, reader_kwargs
+
+
+def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False, auto_global_refine=False, global_refine_profile='memory'):
   set_seed(0)
 
   if os.path.isfile(video_dir) and video_dir.endswith('.bag'):
@@ -111,11 +154,17 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
 
   tracker.on_finish()
 
-  run_one_video_global_nerf(out_folder=out_folder)
+  if auto_global_refine:
+    print(f"run_video finished. Starting global_refine with profile={global_refine_profile}")
+    run_one_video_global_nerf(out_folder=out_folder, global_refine_profile=global_refine_profile)
+  else:
+    print("run_video finished. Skipping automatic global_refine.")
+    print("Run it manually when needed:")
+    print(f"  python {code_dir}/run_custom.py --mode global_refine --video_dir {video_dir} --out_folder {out_folder}")
 
 
 
-def run_one_video_global_nerf(out_folder='/home/bowen/debug/bundlesdf_scan_coffee_415'):
+def run_one_video_global_nerf(out_folder='/home/bowen/debug/bundlesdf_scan_coffee_415', global_refine_profile='memory'):
   set_seed(0)
 
   out_folder += '/'   #!NOTE there has to be a / in the end
@@ -126,23 +175,7 @@ def run_one_video_global_nerf(out_folder='/home/bowen/debug/bundlesdf_scan_coffe
   yaml.dump(cfg_bundletrack, open(cfg_track_dir,'w'))
 
   cfg_nerf = yaml.load(open(f"{out_folder}/config_nerf.yml",'r'))
-  cfg_nerf['n_step'] = 2000
-  cfg_nerf['N_samples'] = 64
-  cfg_nerf['N_samples_around_depth'] = 256
-  cfg_nerf['first_frame_weight'] = 1
-  cfg_nerf['down_scale_ratio'] = 1
-  cfg_nerf['finest_res'] = 256
-  cfg_nerf['num_levels'] = 16
-  cfg_nerf['mesh_resolution'] = 0.002
-  cfg_nerf['n_train_image'] = 500
-  cfg_nerf['fs_sdf'] = 0.1
-  cfg_nerf['frame_features'] = 2
-  cfg_nerf['rgb_weight'] = 100
-
-  cfg_nerf['i_img'] = np.inf
-  cfg_nerf['i_mesh'] = cfg_nerf['i_img']
-  cfg_nerf['i_nerf_normals'] = cfg_nerf['i_img']
-  cfg_nerf['i_save_ray'] = cfg_nerf['i_img']
+  tex_res, reader_kwargs = apply_global_refine_profile(cfg_nerf, profile=global_refine_profile)
 
   cfg_nerf['datadir'] = f"{out_folder}/nerf_with_bundletrack_online"
   cfg_nerf['save_dir'] = copy.deepcopy(cfg_nerf['datadir'])
@@ -152,11 +185,11 @@ def run_one_video_global_nerf(out_folder='/home/bowen/debug/bundlesdf_scan_coffe
   cfg_nerf_dir = f"{cfg_nerf['datadir']}/config.yml"
   yaml.dump(cfg_nerf, open(cfg_nerf_dir,'w'))
 
-  reader = YcbineoatReader(video_dir=args.video_dir, downscale=1)
+  reader = YcbineoatReader(video_dir=args.video_dir, **reader_kwargs)
 
-  tracker = BundleSdf(cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5)
+  tracker = BundleSdf(cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5, tracking_mode=False)
   tracker.cfg_nerf = cfg_nerf
-  tracker.run_global_nerf(reader=reader, get_texture=True, tex_res=512)
+  tracker.run_global_nerf(reader=reader, get_texture=True, tex_res=tex_res)
   tracker.on_finish()
 
   print(f"Done")
@@ -224,12 +257,14 @@ if __name__=="__main__":
   parser.add_argument('--use_gui', type=int, default=1)
   parser.add_argument('--stride', type=int, default=1, help='interval of frames to run; 1 means using every frame')
   parser.add_argument('--debug_level', type=int, default=2, help='higher means more logging')
+  parser.add_argument('--auto_global_refine', type=int, default=0, help='run global_refine automatically after run_video; default 0 to avoid surprise memory spikes')
+  parser.add_argument('--global_refine_profile', type=str, default='memory', choices=['memory', 'full'], help='memory: lower-memory defaults; full: original heavy settings')
   args = parser.parse_args()
 
   if args.mode=='run_video':
-    run_one_video(video_dir=args.video_dir, out_folder=args.out_folder, use_segmenter=args.use_segmenter, use_gui=args.use_gui)
+    run_one_video(video_dir=args.video_dir, out_folder=args.out_folder, use_segmenter=args.use_segmenter, use_gui=args.use_gui, auto_global_refine=bool(args.auto_global_refine), global_refine_profile=args.global_refine_profile)
   elif args.mode=='global_refine':
-    run_one_video_global_nerf(out_folder=args.out_folder)
+    run_one_video_global_nerf(out_folder=args.out_folder, global_refine_profile=args.global_refine_profile)
   elif args.mode=='draw_pose':
     draw_pose()
   else:
